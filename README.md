@@ -1,4 +1,4 @@
-# CI-pipeline-using jenkins, sonarqube, Nexus and Slack
+# CI-pipeline using Jenkins, Maven, SonarQube, Nexus and Slack
 ## What is continuous integration in Jenkins?
 Continuous Integration is a software development process where a code is continuously tested after a commit to ensure there are no bugs. In large teams, many developers work on the same code base. Thus, any of the multiple commits can have a bug.
 ## Pre-requisites:
