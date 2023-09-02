@@ -285,3 +285,363 @@ We select gear symbol and create repository. This repo will be used to store our
 -Go to browser, http://<public_ip_of_sonar_server>.
 -Login with username admin and password admin.
 
+
+ ### Next we will setup our Maven
+ ```
+Name: MAVEN3
+version : keep sam
+```
+
+-Next we need to add Nexus login credentials to Jenkins. Go to Manage Jenkins -> Manage Credentials -> Global -> Add Credentials
+```
+username: admin
+password: <pwd_setup_for_nexus>
+ID: nexuslogin
+description: nexuslogin
+```
+-We will create Jenkinsfile for Build pipeline as below. The variables mentioned in pom.xml repository part and settings.xml will be declared in Jenkinsfile with their values to be used during execution. Update Pipeline file and push to GitHub.
+
+## Step-6: Setup GitHub Webhook and update Jenkins Job
+In this step, we will add GitHub webhook to our repository so that after a new commit Build pipeline will be triggered automatically.
+Go to Github repository, Settings -> Webhooks -> Add JenkinsURL with /github-webhook/ at the end.
+Next we will go to Jenkins and add below configuration to our vprofile-ci-pipeline jon.
+
+## Step-7: Code Analysis with SonarQube
+The Unit test/Code Coverage reports are generated under Jenkins workspace target directory. But these reports are not human readable. We need a tool which can scan and analyze the coed and present it in human readable format in a Dashboard. We will use SonarQube solution of this problem. Two things need to setup:
+SonarScanner tool in Jenkins to scan the code
+We need SonarQube information in jenkins so that Jenkins will know where to upload these reports
+Lets start with SonarScanner tool configuration. Go to Manage Jenkins -> Global Tool Configuration
+```
+Add sonar scanner
+name: sonarscanner
+tick install automatically
+```
+Next we need to go to Configure System, and find SonarQube servers section
+
+```
+tick environment variables
+Add sonarqube
+Name: sonarserver
+Server URL: http://<private_ip_of_sonar_server>
+Server authentication token: we need to create token from sonar website
+```
+
+
+![image](https://github.com/abdtarek/CI-pipeline/assets/137318449/c21be38d-f9b3-4f23-b2b6-e2d98629fad9)
+
+
+We will add our sonar token to global credentials.
+```
+Kind: secret text
+Secret: <paste_token>
+name: sonartoken
+description: sonartoken
+```
+## step-8 lets write our pipeline and run it 
+```
+pipeline {
+    agent any
+    tools {
+	    maven "MAVEN3"
+	    jdk "OracleJDK8"
+	}
+    stages{
+        stage('Fetch code') {
+          steps{
+              git branch: 'vp-rem', url:'https://github.com/devopshydclub/vprofile-repo.git'
+          }  
+        }
+
+        stage('Build') {
+            steps {
+                sh 'mvn clean install -DskipTests'
+            }
+            post {
+                success {
+                    echo "Now Archiving."
+                    archiveArtifacts artifacts: '**/*.war'
+                }
+            }
+        }
+        stage('Test'){
+            steps {
+                sh 'mvn test'
+            }
+
+        }
+
+        stage('Checkstyle Analysis'){
+            steps {
+                sh 'mvn checkstyle:checkstyle'
+            }
+        }
+
+        stage('Sonar Analysis') {
+            environment {
+                scannerHome = tool 'sonar4.7'
+            }
+            steps {
+               withSonarQubeEnv('sonar') {
+                   sh '''${scannerHome}/bin/sonar-scanner -Dsonar.projectKey=vprofile \
+                   -Dsonar.projectName=vprofile \
+                   -Dsonar.projectVersion=1.0 \
+                   -Dsonar.sources=src/ \
+                   -Dsonar.java.binaries=target/test-classes/com/visualpathit/account/controllerTest/ \
+                   -Dsonar.junit.reportsPath=target/surefire-reports/ \
+                   -Dsonar.jacoco.reportsPath=target/jacoco.exec \
+                   -Dsonar.java.checkstyle.reportPaths=target/checkstyle-result.xml'''
+              }
+            }
+        }
+
+    }
+}
+```
+
+<img width="1523" alt="Screenshot 2023-09-01 at 1 10 51 AM" src="https://github.com/abdtarek/CI-pipeline/assets/137318449/1b487f4c-69d2-49a7-91f9-1dddae788426">
+
+
+-We can see quality gate results in SonarQube server.
+
+
+<img width="1523" alt="Screenshot 2023-09-01 at 1 11 27 AM" src="https://github.com/abdtarek/CI-pipeline/assets/137318449/0cf3bbc5-e649-43b5-b4ab-0466bcd5b770">
+
+
+-We can create our own Quality Gates and add to our project as well. click Quality gate -> Create. add Condition. You can give Bug is greater than 80 then Save it. click on projectname it will have a dropdown, click Quality Gate and choose the new Quality gate you have created.
+
+
+<img width="1523" alt="Screenshot 2023-09-01 at 1 21 23 AM" src="https://github.com/abdtarek/CI-pipeline/assets/137318449/d621229e-a4a9-454b-bf31-184f6eb20b0a">
+
+<img width="1523" alt="Screenshot 2023-09-01 at 1 21 43 AM" src="https://github.com/abdtarek/CI-pipeline/assets/137318449/ca66567a-4ff6-4d1b-a9a7-010c25e0cc57">
+
+
+-Next we will create a Webhook in SonarQube to send the analysis results to jenkins.
+
+`http://<private_ip_of_jenkins>:8080/sonarqube-webhook`
+
+![image](https://github.com/abdtarek/CI-pipeline/assets/137318449/b0e7b52f-2b43-4751-92fc-e824badf43ba)
+
+
+We will add below stage to our pipeline and commit changes to Github.
+
+```
+  timeout(time: 10, unit: 'MINUTES') {
+               waitForQualityGate abortPipeline: true
+            }
+          }
+        }
+```
+
+
+<img width="1523" alt="Screenshot 2023-09-01 at 1 24 08 AM" src="https://github.com/abdtarek/CI-pipeline/assets/137318449/e788d5e2-e774-4e63-9b68-882b506f55cb">
+
+## Step-9: Publish Artifact to Nexus Repo
+
+In this step, we will automate process of publishing latest artifact to Nexus repository after successful build. We need to add Build-Timestamp to artifact name to get unique artifact each time. We can go to Manage Jenkins -> Configure System under Build Timestamp we can update the pattern as our wish.
+
+-We will add below stage to our pipeline and see results.
+
+``` stage("Publish to Nexus Repository Manager") {
+            steps {
+                script {
+                    pom = readMavenPom file: "pom.xml";
+                    filesByGlob = findFiles(glob: "target/*.${pom.packaging}");
+                    echo "${filesByGlob[0].name} ${filesByGlob[0].path} ${filesByGlob[0].directory} ${filesByGlob[0].length} ${filesByGlob[0].lastModified}"
+                    artifactPath = filesByGlob[0].path;
+                    artifactExists = fileExists artifactPath;
+                    if(artifactExists) {
+                        echo "*** File: ${artifactPath}, group: ${pom.groupId}, packaging: ${pom.packaging}, version ${pom.version} ARTVERSION";
+                        nexusArtifactUploader(
+                            nexusVersion: NEXUS_VERSION,
+                            protocol: NEXUS_PROTOCOL,
+                            nexusUrl: NEXUS_URL,
+                            groupId: pom.groupId,
+                            version: ARTVERSION,
+                            repository: NEXUS_REPOSITORY,
+                            credentialsId: NEXUS_CREDENTIAL_ID,
+                            artifacts: [
+                                [artifactId: pom.artifactId,
+                                classifier: '',
+                                file: artifactPath,
+                                type: pom.packaging],
+                                [artifactId: pom.artifactId,
+                                classifier: '',
+                                file: "pom.xml",
+                                type: "pom"]
+                            ]
+                        );
+                    }
+```
+
+<img width="1523" alt="Screenshot 2023-09-01 at 1 57 37 AM" src="https://github.com/abdtarek/CI-pipeline/assets/137318449/be3b2829-5ab3-4d07-ae58-589c66166915">
+
+
+-check the nexus repo
+
+
+<img width="1523" alt="Screenshot 2023-09-01 at 1 58 27 AM" src="https://github.com/abdtarek/CI-pipeline/assets/137318449/35683c0b-69c5-451c-aabb-b148d98796e4">
+
+
+## Step-10: Slack Notification
+
+-We will Login to slack and create a workspace by following the prompts. Then we will create a channel jenkins-cicd in our workspace.
+-Next we need to Add jenkins app to slack. Search in Google with Slack apps. Then search for jenkins add to Slack. We will choose the channel jenkins-cicd. It will give us to setup instructions, from there copy Integration token credential ID .
+
+
+-![image](https://github.com/abdtarek/CI-pipeline/assets/137318449/b96d1107-6e29-4782-aeec-e891aceadcd8)
+
+
+
+
+```
+Workspace:  example (in the workspace url example.slack.com)
+credential: slacktoken 
+default channel: #jenkins-cicd
+```
+
+-We will add our slack token to global credentials.
+
+```
+Kind: secret text
+Secret: <paste_token>
+name: slacktoken
+description: slacktoken
+```
+## below is the final script
+
+```
+def COLOR_MAP = [
+    'SUCCESS': 'good', 
+    'FAILURE': 'danger',
+]
+pipeline {
+    agent any
+    tools {
+	    maven "MAVEN3"
+	    jdk "OracleJDK8"
+	}
+
+    stages{
+        stage('Print error'){
+            steps{
+                sh 'fake comment'
+            }
+        }
+        stage('Fetch code') {
+          steps{
+              git branch: 'vp-rem', url:'https://github.com/devopshydclub/vprofile-repo.git'
+          }  
+        }
+
+        stage('Build') {
+            steps {
+                sh 'mvn clean install -DskipTests'
+            }
+            post {
+                success {
+                    echo "Now Archiving."
+                    archiveArtifacts artifacts: '**/*.war'
+                }
+            }
+        }
+        stage('Test'){
+            steps {
+                sh 'mvn test'
+            }
+
+        }
+
+        stage('Checkstyle Analysis'){
+            steps {
+                sh 'mvn checkstyle:checkstyle'
+            }
+        }
+
+        stage('Sonar Analysis') {
+            environment {
+                scannerHome = tool 'sonar4.7'
+            }
+            steps {
+               withSonarQubeEnv('sonar') {
+                   sh '''${scannerHome}/bin/sonar-scanner -Dsonar.projectKey=vprofile \
+                   -Dsonar.projectName=vprofile \
+                   -Dsonar.projectVersion=1.0 \
+                   -Dsonar.sources=src/ \
+                   -Dsonar.java.binaries=target/test-classes/com/visualpathit/account/controllerTest/ \
+                   -Dsonar.junit.reportsPath=target/surefire-reports/ \
+                   -Dsonar.jacoco.reportsPath=target/jacoco.exec \
+                   -Dsonar.java.checkstyle.reportPaths=target/checkstyle-result.xml'''
+              }
+            }
+        }
+
+        stage("Quality Gate") {
+            steps {
+                timeout(time: 1, unit: 'HOURS') {
+                    // Parameter indicates whether to set pipeline to UNSTABLE if Quality Gate fails
+                    // true = set pipeline to UNSTABLE, false = don't
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage("UploadArtifact"){
+            steps{
+                nexusArtifactUploader(
+                  nexusVersion: 'nexus3',
+                  protocol: 'http',
+                  nexusUrl: '172.31.18.28:8081',
+                  groupId: 'QA',
+                  version: "${env.BUILD_ID}-${env.BUILD_TIMESTAMP}",
+                  repository: 'vprofile-repo',
+                  credentialsId: 'nexuslogin',
+                  artifacts: [
+                    [artifactId: 'vproapp',
+                     classifier: '',
+                     file: 'target/vprofile-v2.war',
+                     type: 'war']
+                  ]
+                )
+            }
+        }
+    }
+    post {
+        always {
+            echo 'Slack Notifications.'
+            slackSend channel: '#jenkinscicd',
+                color: COLOR_MAP[currentBuild.currentResult],
+                message: "*${currentBuild.currentResult}:* Job ${env.JOB_NAME} build ${env.BUILD_NUMBER} \n More info at: ${env.BUILD_URL}"
+        }
+    }
+    
+}
+
+```
+
+
+# lets run this
+
+
+<img width="1523" alt="Screenshot 2023-09-01 at 2 37 36 AM" src="https://github.com/abdtarek/CI-pipeline/assets/137318449/d069d534-49f2-45dc-8b11-bcebfb8107e2">
+
+# lets check slack
+
+
+<img width="1523" alt="Screenshot 2023-09-01 at 2 42 38 AM" src="https://github.com/abdtarek/CI-pipeline/assets/137318449/a0f4f04f-7963-4031-be00-8bce337758a9">
+
+### voila and its success
+
+## lets try to make the pipeline fail and check slack again
+
+
+<img width="1523" alt="Screenshot 2023-09-01 at 2 49 14 AM" src="https://github.com/abdtarek/CI-pipeline/assets/137318449/bdabc889-e6b6-4e83-a7b8-f247e92bf04c">
+
+
+<img width="1523" alt="Screenshot 2023-09-01 at 2 49 22 AM" src="https://github.com/abdtarek/CI-pipeline/assets/137318449/9d93521f-df7d-4bfd-b42d-f9b68771f5e9">
+
+# perfect!
+
+
+
+
+
